@@ -2,7 +2,12 @@ import json
 
 from openai import AsyncOpenAI
 
-from trace import trace_llm_request, trace_llm_response
+from trace import (
+    trace_llm_request,
+    trace_llm_response,
+    trace_tool_call,
+    trace_tool_result,
+)
 
 
 LLM_BASE_URL = "http://127.0.0.1:8080/v1"
@@ -15,30 +20,37 @@ client = AsyncOpenAI(
 
 
 SYSTEM_PROMPT = """
-You are the reasoning component of an event-driven home automation agent.
+You are an event-driven home automation agent.
 
 You receive an event and a small amount of relevant context.
 
-For now, you may make only one of these decisions:
+Use the available tools when an action is appropriate.
 
-- turn_on_light
-- no_action
-
-Rules:
-- If motion is detected and the target light is off, choose turn_on_light.
-- If the target light is already on, choose no_action.
-- Do not invent information that is not present in the input.
-
-Return only valid JSON in this format:
-
-{
-  "action": "turn_on_light",
-  "reason": "brief explanation"
-}
+Do not invent entities, states, or capabilities.
+Do not call a tool when no action is necessary.
+Do not claim an action succeeded unless the corresponding tool
+completed successfully.
 """
 
 
-async def reason(agent_input):
+def mcp_tools_to_openai(mcp_tools):
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description or "",
+                "parameters": tool.input_schema,
+            },
+        }
+        for tool in mcp_tools
+    ]
+
+
+async def run_agent(session, agent_input):
+    tool_result = await session.list_tools()
+    openai_tools = mcp_tools_to_openai(tool_result.tools)
+
     messages = [
         {
             "role": "system",
@@ -49,12 +61,71 @@ async def reason(agent_input):
             "content": json.dumps(agent_input),
         },
     ]
-    request = {"model": LLM_MODEL, "messages": messages, "temperature": 0}
-    trace_llm_request(request)
-    response = await client.chat.completions.create(**request)
 
-    content = response.choices[0].message.content
+    for _ in range(8):
+        request = {
+            "model": LLM_MODEL,
+            "messages": messages,
+            "tools": openai_tools,
+            "tool_choice": "auto",
+            "temperature": 0,
+        }
 
-    trace_llm_response(content)
+        trace_llm_request(request)
 
-    return json.loads(content)
+        response = await client.chat.completions.create(**request)
+        message = response.choices[0].message
+
+        message_data = message.model_dump(exclude_none=True)
+
+        trace_llm_response(message_data)
+
+        messages.append(message_data)
+
+        # No tool request means Qwen has finished this agent run.
+        if not message.tool_calls:
+            return message.content or ""
+
+        for tool_call in message.tool_calls:
+            name = tool_call.function.name
+
+            try:
+                arguments = json.loads(
+                    tool_call.function.arguments or "{}"
+                )
+            except json.JSONDecodeError as exc:
+                result_text = f"Invalid tool arguments: {exc}"
+
+            else:
+                trace_tool_call(name, arguments)
+
+                try:
+                    result = await session.call_tool(
+                        name,
+                        arguments=arguments,
+                    )
+
+                    trace_tool_result(result)
+
+                    parts = []
+
+                    for content in result.content:
+                        text = getattr(content, "text", None)
+
+                        if text is not None:
+                            parts.append(text)
+
+                    result_text = "\n".join(parts)
+
+                except Exception as exc:
+                    result_text = f"Tool error: {exc}"
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result_text,
+                }
+            )
+
+    return "Agent stopped after reaching the tool-call limit."

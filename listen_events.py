@@ -5,9 +5,9 @@ import os
 import websockets
 from dotenv import load_dotenv
 
-from actions import execute_decision
+from mcp_client import mcp_session
+from reasoning import run_agent
 from context import build_context
-from reasoning import reason
 from triggers import process_state_change
 from trace import (emit, trace_event, trace_trigger, trace_context,
                    trace_final_result, trace_error)
@@ -79,11 +79,11 @@ async def main():
             trace_context(agent_input)
 
             # Ask Qwen what should happen.
-            decision = await reason(agent_input)
-
-            # Execute the decision through our controlled
-            # action boundary.
-            result = await execute_decision(decision)
+            async with mcp_session() as session:
+                result = await run_agent(
+                    session,
+                    agent_input,
+                )
 
             trace_final_result(result)
 
