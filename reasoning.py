@@ -2,6 +2,8 @@ import json
 
 from openai import AsyncOpenAI
 
+from trace import trace_llm_request, trace_llm_response
+
 
 LLM_BASE_URL = "http://127.0.0.1:8080/v1"
 LLM_MODEL = "qwen3-8b"
@@ -37,21 +39,22 @@ Return only valid JSON in this format:
 
 
 async def reason(agent_input):
-    response = await client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
-            {
-                "role": "user",
-                "content": json.dumps(agent_input),
-            },
-        ],
-        temperature=0,
-    )
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT,
+        },
+        {
+            "role": "user",
+            "content": json.dumps(agent_input),
+        },
+    ]
+    request = {"model": LLM_MODEL, "messages": messages, "temperature": 0}
+    trace_llm_request(request)
+    response = await client.chat.completions.create(**request)
 
     content = response.choices[0].message.content
+
+    trace_llm_response(content)
 
     return json.loads(content)

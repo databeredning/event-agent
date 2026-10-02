@@ -9,6 +9,8 @@ from actions import execute_decision
 from context import build_context
 from reasoning import reason
 from triggers import process_state_change
+from trace import (emit, trace_event, trace_trigger, trace_context,
+                   trace_final_result, trace_error)
 
 
 load_dotenv()
@@ -29,7 +31,7 @@ async def main():
 
         # Home Assistant asks us to authenticate.
         message = json.loads(await websocket.recv())
-        print("Received:", message)
+        emit("CONNECTION", message)
 
         # Authenticate.
         await websocket.send(json.dumps({
@@ -38,7 +40,7 @@ async def main():
         }))
 
         message = json.loads(await websocket.recv())
-        print("Received:", message)
+        emit("CONNECTION", message)
 
         # Subscribe to Home Assistant state changes.
         await websocket.send(json.dumps({
@@ -48,7 +50,7 @@ async def main():
         }))
 
         message = json.loads(await websocket.recv())
-        print("Subscription:", message)
+        emit("SUBSCRIPTION", message)
 
         # Keep listening for events.
         while True:
@@ -60,6 +62,8 @@ async def main():
             event = message["event"]
             data = event["data"]
 
+            trace_event(data)
+
             # Convert the raw Home Assistant state change
             # into a semantic trigger.
             trigger = process_state_change(data)
@@ -67,24 +71,26 @@ async def main():
             if trigger is None:
                 continue
 
-            print("TRIGGER:", trigger)
+            trace_trigger(trigger)
 
             # Gather only the context relevant to this event.
             agent_input = build_context(trigger)
 
-            print("AGENT INPUT:", agent_input)
+            trace_context(agent_input)
 
             # Ask Qwen what should happen.
             decision = await reason(agent_input)
-
-            print("DECISION:", decision)
 
             # Execute the decision through our controlled
             # action boundary.
             result = await execute_decision(decision)
 
-            print("ACTION RESULT:", result)
+            trace_final_result(result)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as error:
+        trace_error(error)
+        raise
