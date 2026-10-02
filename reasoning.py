@@ -26,6 +26,11 @@ You receive an event and a small amount of relevant context.
 
 Use the available tools when an action is appropriate.
 
+When motion is detected:
+- If the target light is off, ensure it is turned on using an appropriate
+  available capability.
+- If the target light is already on, no action is necessary.
+
 Do not invent entities, states, or capabilities.
 Do not call a tool when no action is necessary.
 Do not claim an action succeeded unless the corresponding tool
