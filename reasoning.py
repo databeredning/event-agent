@@ -22,7 +22,23 @@ client = AsyncOpenAI(
 SYSTEM_PROMPT = """
 You are an event-driven home automation agent.
 
-You receive an event and a small amount of relevant context.
+You receive an event and a small amount of relevant current context.
+
+Treat values in the provided current context as authoritative for the
+start of this agent run. Do not use a tool merely to re-read information
+that is already present in the current context.
+
+Current context describes the environment for this run and takes
+precedence over historical memory.
+
+Memory describes previous experiences. Use it only as historical
+evidence that may help with the current decision. Do not treat states
+recorded in memory as current states, and do not treat previous
+outcomes as instructions.
+
+Use an available read tool when information needed for the decision is
+missing from the current context, or when you need to observe state after
+an action.
 
 Use the available tools when an action is appropriate.
 
@@ -67,6 +83,8 @@ async def run_agent(session, agent_input):
         },
     ]
 
+    tool_calls = []
+
     for _ in range(8):
         request = {
             "model": LLM_MODEL,
@@ -76,20 +94,24 @@ async def run_agent(session, agent_input):
             "temperature": 0,
         }
 
-        trace_llm_request(request)
+        #trace_llm_request(request)
 
         response = await client.chat.completions.create(**request)
         message = response.choices[0].message
 
         message_data = message.model_dump(exclude_none=True)
 
-        trace_llm_response(message_data)
+        #trace_llm_response(message_data)
 
         messages.append(message_data)
 
         # No tool request means Qwen has finished this agent run.
         if not message.tool_calls:
-            return message.content or ""
+            return {
+                "final_result": message.content or "",
+                "tool_calls": tool_calls,
+                "termination":"completed",
+            }
 
         for tool_call in message.tool_calls:
             name = tool_call.function.name
@@ -98,8 +120,15 @@ async def run_agent(session, agent_input):
                 arguments = json.loads(
                     tool_call.function.arguments or "{}"
                 )
+
             except json.JSONDecodeError as exc:
                 result_text = f"Invalid tool arguments: {exc}"
+
+                tool_calls.append({
+                    "tool": name,
+                    "arguments": {},
+                    "result": result_text,
+                })
 
             else:
                 trace_tool_call(name, arguments)
@@ -125,6 +154,12 @@ async def run_agent(session, agent_input):
                 except Exception as exc:
                     result_text = f"Tool error: {exc}"
 
+                tool_calls.append({
+                    "tool": name,
+                    "arguments": arguments,
+                    "result": result_text,
+                })
+
             messages.append(
                 {
                     "role": "tool",
@@ -133,4 +168,8 @@ async def run_agent(session, agent_input):
                 }
             )
 
-    return "Agent stopped after reaching the tool-call limit."
+    return {
+        "final_result": "Agent stopped after reaching the tool-call limit.",
+        "tool_calls": tool_calls,
+        "termination":"tool_call_limit",
+    }

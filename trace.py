@@ -18,6 +18,18 @@ _SENSITIVE = re.compile(
 )
 _PRIVATE = {"reasoning", "reasoning_content", "chain_of_thought"}
 
+def trace_memory_retrieval(memory):
+    emit("MEMORY RETRIEVAL", memory)
+
+def trace_run_start(run_id):
+    emit("RUN START", {
+        "run_id": run_id,
+    })
+
+def trace_run_end(run_id):
+    emit("RUN END", {
+        "run_id": run_id,
+    })
 
 def _clean(value):
     if hasattr(value, "model_dump"):
